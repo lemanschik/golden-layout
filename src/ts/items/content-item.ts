@@ -2,9 +2,9 @@ import { ResolvedItemConfig } from '../config/resolved-config'
 import { BrowserPopout } from '../controls/browser-popout'
 import { AssertError, UnexpectedNullError } from '../errors/internal-error'
 import { LayoutManager } from '../layout-manager'
+import { DomConstants } from '../utils/dom-constants'
 import { EventEmitter } from '../utils/event-emitter'
-import { getJQueryOffset } from '../utils/jquery-legacy'
-import { AreaLinkedRect, ItemType } from '../utils/types'
+import { AreaLinkedRect, ItemType, SizeUnitEnum } from '../utils/types'
 import { getUniqueId, setElementDisplayVisibility } from '../utils/utils'
 import { ComponentItem } from './component-item'
 import { ComponentParentableItem } from './component-parentable-item'
@@ -36,14 +36,16 @@ export abstract class ContentItem extends EventEmitter {
     /** @internal */
     private _isInitialised;
 
+    ignoring = false;
+    ignoringChild = false;
     /** @internal */
-    width: number; // pixels
+    size: number;
     /** @internal */
-    minWidth: number; // pixels
+    sizeUnit: SizeUnitEnum;
     /** @internal */
-    height: number; // pixels
+    minSize: number | undefined;
     /** @internal */
-    minHeight: number; // pixels
+    minSizeUnit: SizeUnitEnum;
 
     isGround: boolean
     isRow: boolean
@@ -94,10 +96,10 @@ export abstract class ContentItem extends EventEmitter {
         this.isStack = false;
         this.isComponent = false;
 
-        this.width = config.width;
-        this.minWidth = config.minWidth;
-        this.height = config.height;
-        this.minHeight = config.minHeight;
+        this.size = config.size;
+        this.sizeUnit = config.sizeUnit;
+        this.minSize = config.minSize;
+        this.minSizeUnit = config.minSizeUnit;
 
         this._isClosable = config.isClosable;
 
@@ -109,9 +111,23 @@ export abstract class ContentItem extends EventEmitter {
 
     /**
      * Updaters the size of the component and its children, called recursively
+     * Called whenever the dimensions of this item or one of its parents change
      * @internal
      */
-    abstract updateSize(): void;
+    updateSize(): void {
+        this.layoutManager.beginVirtualSizedContainerAdding();
+        try {
+            this.updateNodeSize();
+            this.updateContentItemsSize();
+        } finally {
+            this.layoutManager.endVirtualSizedContainerAdding();
+        }
+    }
+
+    /**
+     * @internal
+     */
+    abstract updateNodeSize(): void;
 
     /**
      * Removes a child node (and its children) from the tree
@@ -132,9 +148,9 @@ export abstract class ContentItem extends EventEmitter {
         }
 
         /**
-		 * Call destroy on the content item.
-		 * All children are destroyed as well
-		 */
+	 * Call destroy on the content item.
+	 * All children are destroyed as well
+	 */
         if (!keepChild) {
 			this._contentItems[index].destroy();
         }
@@ -142,12 +158,18 @@ export abstract class ContentItem extends EventEmitter {
         /**
          * Remove the content item from this nodes array of children
          */
-        this._contentItems.splice(index, 1);
+        this.layoutManager.deferIfDragging((cancel: boolean) => {
+            this.ignoringChild = false;
+            contentItem.ignoring = false;
+            if (! cancel) {
+                this._contentItems.splice(index, 1);
+            }
+        });
 
         /**
          * If this node still contains other content items, adjust their size
          */
-        if (this._contentItems.length > 0) {
+        if (this._contentItems.length > (this.layoutManager.currentlyDragging() ? 1 : 0)) {
             this.updateSize();
         } else {
             /**
@@ -157,7 +179,7 @@ export abstract class ContentItem extends EventEmitter {
                 if (this._parent === null) {
                     throw new UnexpectedNullError('CIUC00874');
                 } else {
-                    this._parent.removeChild(this);
+                    this._parent.removeChild(this, keepChild);
                 }
             }
         }
@@ -213,6 +235,7 @@ export abstract class ContentItem extends EventEmitter {
                 oldChild._parent = null;
                 oldChild.destroy(); // will now also destroy all children of oldChild
             }
+//            }
 
             /*
             * Wire the new contentItem into the tree
@@ -220,8 +243,10 @@ export abstract class ContentItem extends EventEmitter {
             this._contentItems[index] = newChild;
             newChild.setParent(this);
             // newChild inherits the sizes from the old child:
-            newChild.height = oldChild.height;
-            newChild.width = oldChild.width;
+            newChild.size = oldChild.size;
+            newChild.sizeUnit = oldChild.sizeUnit;
+            newChild.minSize = oldChild.minSize;
+            newChild.minSizeUnit = oldChild.minSizeUnit;
 
             //TODO This doesn't update the config... refactor to leave item nodes untouched after creation
             if (newChild._parent === null) {
@@ -279,7 +304,7 @@ export abstract class ContentItem extends EventEmitter {
         if (dropTargetIndicator === null) {
             throw new UnexpectedNullError('ACIHDZ5593');
         } else {
-            dropTargetIndicator.highlightArea(area);
+            dropTargetIndicator.highlightArea(area, 1);
         }
     }
 
@@ -310,11 +335,19 @@ export abstract class ContentItem extends EventEmitter {
         for (let i = 0; i < this._contentItems.length; i++) {
             this._contentItems[i].destroy();
         }
-        this._contentItems = [];
+        const element = this._element;
+        element.style.display = 'none';
+        this.layoutManager.deferIfDragging((cancel) => {
+            if (cancel) {
+                element.style.display = '';
+            } else {
+                this._contentItems = [];
 
-        this.emitBaseBubblingEvent('beforeItemDestroyed');
-        this._element.remove();
-        this.emitBaseBubblingEvent('itemDestroyed');
+                this.emitBaseBubblingEvent('beforeItemDestroyed');
+                this._element.remove();
+                this.emitBaseBubblingEvent('itemDestroyed');
+            }
+        });
     }
 
     /**
@@ -324,16 +357,18 @@ export abstract class ContentItem extends EventEmitter {
     getElementArea(element?: HTMLElement): ContentItem.Area | null {
         element = element ?? this._element;
 
-        const offset = getJQueryOffset(element);
-        const width = element.offsetWidth;
-        const height = element.offsetHeight;
-        // const widthAndHeight = getJQueryWidthAndHeight(element);
+        const rect = element.getBoundingClientRect();
+        const top = rect.top + document.body.scrollTop;
+        const left = rect.left + document.body.scrollLeft;
+
+        const width = rect.width;
+        const height = rect.height;
 
         return {
-            x1: offset.left + 1,
-            y1: offset.top + 1,
-            x2: offset.left + width - 1,
-            y2: offset.top + height - 1,
+            x1: left,
+            y1: top,
+            x2: left + width,
+            y2: top + height,
             surface: width * height,
             contentItem: this
         };
@@ -381,7 +416,8 @@ export abstract class ContentItem extends EventEmitter {
     /** @internal */
     protected updateContentItemsSize(): void {
         for (let i = 0; i < this._contentItems.length; i++) {
-            this._contentItems[i].updateSize();
+            if (! this._contentItems[i].ignoring)
+                this._contentItems[i].updateSize();
         }
     }
 
@@ -489,6 +525,16 @@ export namespace ContentItem {
     export interface Area extends AreaLinkedRect {
         surface: number;
         contentItem: ContentItem;
+    }
+
+    /** @internal */
+    export function createElement(kindClass?: string): HTMLDivElement {
+        const element = document.createElement('div');
+        element.classList.add(DomConstants.ClassName.Item);
+        if (kindClass) {
+            element.classList.add(kindClass);
+        }
+        return element;
     }
 }
 

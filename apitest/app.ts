@@ -3,7 +3,6 @@ import {
     ComponentContainer,
     ComponentItemConfig,
     ContentItem,
-    DragSource,
     EventEmitter,
     GoldenLayout,
     JsonValue,
@@ -73,7 +72,6 @@ export class App {
 
     private _goldenLayoutBoundingClientRect: DOMRect = new DOMRect();
 
-    private readonly _windowResizeListener = () => this.handleWindowResizeEvent();
     private readonly _globalBubbleClickListener = () => this.handleGlobalBubbleClickEvent();
     private readonly _globalCaptureClickListener = () => this.handleGlobalCaptureClickEvent();
     private readonly _bindComponentEventListener =
@@ -94,6 +92,7 @@ export class App {
         this._layoutElement = layoutElement;
         this._goldenLayout = new GoldenLayout(this._layoutElement, this._bindComponentEventListener, this._unbindComponentEventListener);
 
+        this._goldenLayout.resizeWithContainerAutomatically = true;
         this._goldenLayout.beforeVirtualRectingEvent = (count) => this.handleBeforeVirtualRectingEvent(count);
         this._goldenLayout.addEventListener('stackHeaderClick', (event) => this.handleStackHeaderClick(event));
 
@@ -281,7 +280,6 @@ export class App {
 
         globalThis.addEventListener('click', this._globalBubbleClickListener, { passive: true });
         globalThis.addEventListener('click', this._globalCaptureClickListener, { capture: true, passive: true });
-        globalThis.addEventListener('resize', this._windowResizeListener, { passive: true });
     }
 
     start(): void {
@@ -301,16 +299,17 @@ export class App {
         }
     }
 
-    private handleBindComponentEvent(container: ComponentContainer, itemConfig: ResolvedComponentItemConfig): ComponentContainer.BindableComponent {
+    private handleBindComponentEvent(container: ComponentContainer, itemConfig: ResolvedComponentItemConfig): ComponentContainer.Handle {
         const componentTypeName = ResolvedComponentItemConfig.resolveComponentTypeName(itemConfig);
         if (componentTypeName === undefined) {
             throw new Error('handleBindComponentEvent: Undefined componentTypeName');
         }
         const component = this.createComponent(container, componentTypeName, itemConfig.componentState, this._useVirtualEventBinding);
+        this._boundComponentMap.set(container, component);
+
         if (this._useVirtualEventBinding) {
             const componentRootElement = component.rootHtmlElement;
             this._layoutElement.appendChild(componentRootElement);
-            this._boundComponentMap.set(container, component);
             container.virtualRectingRequiredEvent =
                 (container, width, height) => this.handleContainerVirtualRectingRequiredEvent(container, width, height);
             container.virtualVisibilityChangeRequiredEvent =
@@ -367,7 +366,7 @@ export class App {
             throw new Error('handleContainerVirtualRectingRequiredEvent: Component does not have a root HTML element');
         }
 
-        const containerBoundingClientRect = container.element.getBoundingClientRect();
+        const containerBoundingClientRect = (container.element as HTMLElement).getBoundingClientRect();
         const left = containerBoundingClientRect.left - this._goldenLayoutBoundingClientRect.left;
         rootElement.style.left = this.numberToPixels(left);
         const top = containerBoundingClientRect.top - this._goldenLayoutBoundingClientRect.top;
@@ -407,14 +406,6 @@ export class App {
         }
 
         componentRootElement.style.zIndex = defaultZIndex;
-    }
-
-    private handleWindowResizeEvent() {
-        // handling of resize event is required if GoldenLayout does not use body element
-        const bodyWidth = document.body.offsetWidth;
-        const controlsWidth = this._controlsElement.offsetWidth;
-        const height = document.body.offsetHeight;
-        this._goldenLayout.setSize(bodyWidth - controlsWidth, height)
     }
 
     private handleGlobalBubbleClickEvent() {
@@ -506,9 +497,13 @@ export class App {
         this._goldenLayout.addComponent(componentType);
     }
 
-    private getDragComponentTypeAndState(): DragSource.ComponentItemConfig {
+    private getDragComponentTypeAndState(): ComponentItemConfig {
         const componentType = this._registeredComponentTypesForAddSelect.value;
-        return { type: componentType };
+        const itemConfig: ComponentItemConfig = {
+            type: 'component',
+            componentType,
+        }
+        return itemConfig;
     }
 
     private handleLoadLayoutButtonClick() {

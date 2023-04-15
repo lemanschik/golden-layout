@@ -3,8 +3,8 @@ import { ResolvedComponentItemConfig, ResolvedGroundItemConfig, ResolvedHeadered
 import { AssertError, UnexpectedNullError } from '../errors/internal-error';
 import { LayoutManager } from '../layout-manager';
 import { DomConstants } from '../utils/dom-constants';
-import { AreaLinkedRect, ItemType } from '../utils/types';
-import { getElementWidthAndHeight, setElementHeight, setElementWidth } from '../utils/utils';
+import { AreaLinkedRect, ItemType, SizeUnitEnum } from '../utils/types';
+import { setElementHeight, setElementWidth } from '../utils/utils';
 import { ComponentItem } from './component-item';
 import { ComponentParentableItem } from './component-parentable-item';
 import { ContentItem } from './content-item';
@@ -20,27 +20,14 @@ export class GroundItem extends ComponentParentableItem {
     private readonly _childElementContainer: HTMLElement;
     private readonly _containerElement: HTMLElement;
 
-    constructor(layoutManager: LayoutManager, rootItemConfig: ResolvedRootItemConfig | undefined, containerElement: HTMLElement) {
+    constructor(layoutManager: LayoutManager, rootItemConfig: ResolvedRootItemConfig | undefined, containerElement: HTMLElement, containerPosition: Node | null) {
 
-        super(layoutManager, ResolvedGroundItemConfig.create(rootItemConfig), null, GroundItem.createElement(document));
+        super(layoutManager, ResolvedGroundItemConfig.create(rootItemConfig), null, _createRootElement(containerElement, containerPosition));
+        this.element.classList.add(DomConstants.ClassName.GoldenLayout);
 
         this.isGround = true;
         this._childElementContainer = this.element;
         this._containerElement = containerElement;
-
-        // insert before any pre-existing content elements
-        let before = null;
-        while (true) {
-            const prev: ChildNode | null =
-                before ? before.previousSibling : this._containerElement.lastChild;
-            if (prev instanceof Element
-                && prev.classList.contains(DomConstants.ClassName.Content)) {
-                before = prev;
-            } else {
-                break;
-            }
-        }
-        this._containerElement.insertBefore(this.element, before);
     }
 
     override init(): void {
@@ -99,11 +86,12 @@ export class GroundItem extends ComponentParentableItem {
     ): number {
         this.layoutManager.checkMinimiseMaximisedStack();
 
-        const resolvedItemConfig = ItemConfig.resolve(itemConfig);
+        const resolvedItemConfig = ItemConfig.resolve(itemConfig, false);
         let parent: ContentItem;
         if (this.contentItems.length > 0) {
             parent = this.contentItems[0];
         } else {
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
             parent = this;
         }
         if (parent.isComponent) {
@@ -119,7 +107,7 @@ export class GroundItem extends ComponentParentableItem {
         // Remove existing root if it exists
         this.clearRoot();
 
-        const resolvedItemConfig = ItemConfig.resolve(itemConfig) as ResolvedComponentItemConfig;
+        const resolvedItemConfig = ItemConfig.resolve(itemConfig, false) as ResolvedComponentItemConfig;
 
         if (resolvedItemConfig.maximised) {
             throw new Error('Root Component cannot be maximised');
@@ -180,21 +168,8 @@ export class GroundItem extends ComponentParentableItem {
                 setElementHeight(this.contentItems[0].element, height);
             }
 
-            this.updateContentItemsSize();
-        }
-    }
-
-    /**
-     * Adds a Root ContentItem.
-     * Internal only.  To replace Root ContentItem with API, use {@link (LayoutManager:class).updateRootSize}
-     */
-    override updateSize(): void {
-        this.layoutManager.beginVirtualSizedContainerAdding();
-        try {
-            this.updateNodeSize();
-            this.updateContentItemsSize();
-        } finally {
-            this.layoutManager.endVirtualSizedContainerAdding();
+            //this.updateContentItemsSize();
+            this.updateSize();
         }
     }
 
@@ -257,7 +232,6 @@ export class GroundItem extends ComponentParentableItem {
             }
 
             const type = area.side[0] == 'x' ? ItemType.row : ItemType.column;
-            const dimension = area.side[0] == 'x' ? 'width' : 'height';
             const insertBefore = area.side[1] == '2';
             const column = this.contentItems[0];
             if (!(column instanceof RowOrColumn) || column.type !== type) {
@@ -266,14 +240,16 @@ export class GroundItem extends ComponentParentableItem {
                 this.replaceChild(column, rowOrColumn);
                 rowOrColumn.addChild(contentItem, insertBefore ? 0 : undefined, true);
                 rowOrColumn.addChild(column, insertBefore ? undefined : 0, true);
-                column[dimension] = 50;
-                contentItem[dimension] = 50;
+                column.size = 50;
+                contentItem.size = 50;
+                contentItem.sizeUnit = SizeUnitEnum.Percent;
                 rowOrColumn.updateSize();
             } else {
                 const sibling = column.contentItems[insertBefore ? 0 : column.contentItems.length - 1]
                 column.addChild(contentItem, insertBefore ? 0 : undefined, true);
-                sibling[dimension] *= 0.5;
-                contentItem[dimension] = sibling[dimension];
+                sibling.size *= 0.5;
+                contentItem.size = sibling.size;
+                contentItem.sizeUnit = SizeUnitEnum.Percent;
                 column.updateSize();
             }
         }
@@ -331,8 +307,8 @@ export class GroundItem extends ComponentParentableItem {
         // only applicable if ComponentItem is root and then it always has focus
     }
 
-    private updateNodeSize(): void {
-        const { width, height } = getElementWidthAndHeight(this._containerElement);
+    updateNodeSize(): void {
+        const { width, height } = this.layoutManager.containerWidthAndHeight();
 
         setElementWidth(this.element, width);
         setElementHeight(this.element, height);
@@ -349,8 +325,14 @@ export class GroundItem extends ComponentParentableItem {
     private deepGetAllContentItems(content: readonly ContentItem[], result: ContentItem[]): void {
         for (let i = 0; i < content.length; i++) {
             const contentItem = content[i];
-            result.push(contentItem);
-            this.deepGetAllContentItems(contentItem.contentItems, result);
+            const children = contentItem.contentItems;
+            if (! contentItem.ignoring) {
+                if (! contentItem.ignoringChild
+                    || (contentItem.type !== ItemType.row && contentItem.type !== ItemType.column)
+                    || children.length > 2)
+                    result.push(contentItem);
+                this.deepGetAllContentItems(children, result);
+            }
         }
     }
 
@@ -366,6 +348,12 @@ export class GroundItem extends ComponentParentableItem {
         }
     }
 
+}
+
+function _createRootElement(containerElement: HTMLElement, containerPosition: Node | null): HTMLDivElement {
+    const element = ContentItem.createElement(DomConstants.ClassName.Root);
+    containerElement.insertBefore(element, containerPosition);
+    return element;
 }
 
 /** @internal */
@@ -390,13 +378,5 @@ export namespace GroundItem {
             y1: 'y2',
             x1: 'x2',
         };
-    }
-
-    export function createElement(document: Document): HTMLDivElement {
-        const element = document.createElement('div');
-        element.classList.add(DomConstants.ClassName.GoldenLayout);
-        element.classList.add(DomConstants.ClassName.Item);
-        element.classList.add(DomConstants.ClassName.Root);
-        return element;
     }
 }

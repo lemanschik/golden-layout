@@ -6,7 +6,7 @@ import { numberToPixels, setElementDisplayVisibility } from '../utils/utils';
 export class DropTargetIndicator {
     private _element: HTMLElement;
 
-    constructor() {
+    constructor(parent: HTMLElement = document.body, before: Node | null = null) {
         // Maybe use container instead of Document Body?
         this._element = document.createElement('div');
         this._element.classList.add(DomConstants.ClassName.DropTargetIndicator);
@@ -14,18 +14,18 @@ export class DropTargetIndicator {
         innerElement.classList.add(DomConstants.ClassName.Inner);
         this._element.appendChild(innerElement);
 
-        document.body.appendChild(this._element);
+        parent.insertBefore(this._element, before);
     }
 
     destroy(): void {
         this._element.remove();
     }
 
-    highlightArea(area: AreaLinkedRect): void {
-        this._element.style.left = numberToPixels(area.x1);
-        this._element.style.top = numberToPixels(area.y1);
-        this._element.style.width = numberToPixels(area.x2 - area.x1);
-        this._element.style.height = numberToPixels(area.y2 - area.y1);
+    highlightArea(area: AreaLinkedRect, margin: number): void {
+        this._element.style.left = numberToPixels(area.x1 + margin);
+        this._element.style.top = numberToPixels(area.y1 + margin);
+        this._element.style.width = numberToPixels(area.x2 - area.x1 - margin);
+        this._element.style.height = numberToPixels(area.y2 - area.y1 - margin);
         this._element.style.display = 'block';
     }
 
