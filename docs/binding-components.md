@@ -1,5 +1,6 @@
 # Binding Components
 
+
 Golden Layout binds to components and then controls their position, size and visibility (positioning) so that they fit within a layout.
 
 You can control how a component is allocated and bound by setting the `createComponentElement` function, or by registering a initialization function
@@ -80,6 +81,7 @@ When a component is removed from Golden Layout it will be necessary to remove th
 With virtual components, Golden Layout knows nothing about components and does not include the component's HTML elements in its own DOM hierarchy. Instead, whenever a component needs its position, size or visibility changed, Golden Layout will fire events which allow the application to change a component's position, size or visibility.  This is analogous to virtual grids where strings and other content to be displayed in a grid, are not included within the grid. Instead the grid fires events whenever it needs to display content. The application will return the required content.
 
 Virtual Components has the following advantages:
+
 * It is no longer necessary to extract the top level HTML element from a component.
 * Applications using frameworks with their own component hierarchy, such as Angular and Vue, no longer have to break their component hierarchy to insert Golden Layout. The framework's methodology for handling parent/child relationships can be maintained even with the components which Golden Layout is positioning. (Teleporting component's HTML elements is no longer necessary)
 * Applications typically bind a component's top level HTML element to the Golden Layout root element. Debugging becomes easier as the DOM hierarchy relevant to your application is a lot shallower.
